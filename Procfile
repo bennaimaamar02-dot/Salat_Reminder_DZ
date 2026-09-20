@@ -1,0 +1,1 @@
+worker: python Salat_Reminder_DZ_bot.py
