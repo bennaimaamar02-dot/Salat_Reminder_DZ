@@ -15,7 +15,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-TOKEN = "8971250331:AAHg80Pv1kCi8Ts1vAAKKCoyW5F7bh_mq5g"
+TOKEN = os.environ.get("BOT_TOKEN")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     button = KeyboardButton("📍 مشاركة موقعي الحالي", request_location=True)
