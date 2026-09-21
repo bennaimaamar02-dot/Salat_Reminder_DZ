@@ -34,14 +34,15 @@ def keep_alive():
 
 
 # ---------------------------------------------------------
-# 2. البيانات والولايات الجزائرية الـ 58
+# 2. البيانات والولايات وتخزين المواقيت (Cache)
 # ---------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# قاعدة بيانات مصغرة لحفظ ولاية كل مستخدم {chat_id: {"name": "الشلف", "en": "Chlef"}}
 user_cities = {}
 
-# قائمة ربط الولايات الـ 58 بالاسم العربي والرمز الإنجليزي للـ API
+# التخزين المؤقت للمواقيت تجنباً لبطء API: { "Chlef_2026-09-21": {...timings...} }
+PRAYER_CACHE = {}
+
 WILAYAS = {
     "1": {"ar": "أدرار", "en": "Adrar"},
     "2": {"ar": "الشلف", "en": "Chlef"},
@@ -104,18 +105,28 @@ WILAYAS = {
 }
 
 
-# جلب مواقيت الصلاة الحقيقية من Aladhan API
+# جلب المواقيت مع ميزة التخزين المؤقت وتحديد مهلة ثانية واحدة
 def fetch_prayer_times(city_en):
+  algeria_tz = pytz.timezone("Africa/Algiers")
+  today_str = datetime.now(algeria_tz).strftime("%Y-%m-%d")
+  cache_key = f"{city_en}_{today_str}"
+
+  if cache_key in PRAYER_CACHE:
+    return PRAYER_CACHE[cache_key]
+
   try:
     url = f"https://api.aladhan.com/v1/timingsByCity?city={city_en}&country=Algeria&method=3"
-    response = requests.get(url, timeout=5)
+    response = requests.get(url, timeout=2)
     data = response.json()
     if data["code"] == 200:
-      return data["data"]["timings"]
+      timings = data["data"]["timings"]
+      PRAYER_CACHE[cache_key] = timings
+      return timings
   except Exception:
     pass
 
-  return {
+  # مواقيت احتياطية في حال تعثر الاتصال
+  fallback = {
       "Fajr": "05:15",
       "Sunrise": "06:41",
       "Dhuhr": "12:48",
@@ -123,9 +134,9 @@ def fetch_prayer_times(city_en):
       "Maghrib": "18:55",
       "Isha": "20:16",
   }
+  return fallback
 
 
-# حساب الوقت المتبقي للصلاة القادمة
 def get_next_prayer_info(prayer_times):
   algeria_tz = pytz.timezone("Africa/Algiers")
   now = datetime.now(algeria_tz)
@@ -181,7 +192,6 @@ def get_next_prayer_info(prayer_times):
   )
 
 
-# بناء جدول المواقيت المحاذى بالنص الصريح
 def build_prayer_dashboard(city_ar, prayer_times):
   algeria_tz = pytz.timezone("Africa/Algiers")
   today_date = datetime.now(algeria_tz).strftime("%Y-%m-%d")
@@ -204,11 +214,10 @@ def build_prayer_dashboard(city_ar, prayer_times):
 
 
 # ---------------------------------------------------------
-# 3. الأوامر وتجربة المستخدم (Reply Keyboard & Commands)
+# 3. الأوامر والتفاعل
 # ---------------------------------------------------------
 
 
-# الأزرار السفلية الثابتة للمستخدم
 def get_main_keyboard():
   keyboard = [["🕌 مواقيت الصلاة", "⚙️ تغيير الولاية"]]
   return ReplyKeyboardMarkup(
@@ -233,71 +242,74 @@ async def setcity_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def salat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  chat_id = update.effective_chat.id
+  try:
+    chat_id = update.effective_chat.id
 
-  if chat_id not in user_cities:
+    if chat_id not in user_cities:
+      await update.message.reply_text(
+          "يرجى تحديد ولايتك أولاً بإرسال رقمها (1-58).",
+          reply_markup=get_main_keyboard(),
+      )
+      return
+
+    city_data = user_cities[chat_id]
+    prayer_times = fetch_prayer_times(city_data["en"])
+    dashboard = build_prayer_dashboard(city_data["ar"], prayer_times)
+
     await update.message.reply_text(
-        "يرجى تحديد ولايتك أولاً بإرسال رقمها (1-58).",
-        reply_markup=get_main_keyboard(),
+        dashboard, parse_mode="Markdown", reply_markup=get_main_keyboard()
     )
-    return
-
-  city_data = user_cities[chat_id]
-  prayer_times = fetch_prayer_times(city_data["en"])
-  dashboard = build_prayer_dashboard(city_data["ar"], prayer_times)
-
-  await update.message.reply_text(
-      dashboard, parse_mode="Markdown", reply_markup=get_main_keyboard()
-  )
+  except Exception as e:
+    print(f"Error in salat_command: {e}")
 
 
-# معالج الرسائل النصية والأزرار السفلية
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  chat_id = update.effective_chat.id
-  text = update.message.text.strip()
+  try:
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip()
 
-  # التعامل مع الأزرار السفلية
-  if text == "🕌 مواقيت الصلاة":
-    await salat_command(update, context)
-    return
-  elif text == "⚙️ تغيير الولاية":
-    await setcity_command(update, context)
-    return
+    if text == "🕌 مواقيت الصلاة":
+      await salat_command(update, context)
+      return
+    elif text == "⚙️ تغيير الولاية":
+      await setcity_command(update, context)
+      return
 
-  # البحث عن الولاية بالرقم أو بالاسم
-  selected_city = None
-  if text in WILAYAS:
-    selected_city = WILAYAS[text]
-  else:
-    for code, data in WILAYAS.items():
-      if data["ar"] in text or text in data["ar"]:
-        selected_city = data
-        break
+    selected_city = None
+    if text in WILAYAS:
+      selected_city = WILAYAS[text]
+    else:
+      for code, data in WILAYAS.items():
+        if data["ar"] in text or text in data["ar"]:
+          selected_city = data
+          break
 
-  if selected_city:
-    user_cities[chat_id] = selected_city
-    await update.message.reply_text(
-        f"✅ تم حفظ ولايتك: **{selected_city['ar']}**.\n\n"
-        "اضغط الآن على زر **🕌 مواقيت الصلاة** لعرض الجدول.",
-        parse_mode="Markdown",
-        reply_markup=get_main_keyboard(),
-    )
-  else:
-    await update.message.reply_text(
-        "لم أتعرف على الولاية. يرجى إرسال رقم الولاية الصحيح من 1 إلى 58.",
-        reply_markup=get_main_keyboard(),
-    )
+    if selected_city:
+      user_cities[chat_id] = selected_city
+      await update.message.reply_text(
+          f"✅ تم حفظ ولايتك: **{selected_city['ar']}**.\n\n"
+          "اضغط الآن على زر **🕌 مواقيت الصلاة** لعرض الجدول.",
+          parse_mode="Markdown",
+          reply_markup=get_main_keyboard(),
+      )
+    else:
+      await update.message.reply_text(
+          "لم أتعرف على الولاية. يرجى إرسال رقم الولاية الصحيح من 1 إلى 58.",
+          reply_markup=get_main_keyboard(),
+      )
+  except Exception as e:
+    print(f"Error in handle_message: {e}")
 
 
 # ---------------------------------------------------------
-# 4. التنبيه التلقائي (قبل 10 دقائق من الصلاة)
+# 4. التنبيه التلقائي الآمن
 # ---------------------------------------------------------
 async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
   try:
     algeria_tz = pytz.timezone("Africa/Algiers")
     now = datetime.now(algeria_tz)
 
-    for chat_id, city_data in user_cities.items():
+    for chat_id, city_data in list(user_cities.items()):
       prayer_times = fetch_prayer_times(city_data["en"])
       prayers_check = {
           "الفجر": prayer_times.get("Fajr"),
@@ -317,7 +329,6 @@ async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
 
         diff_seconds = (prayer_dt - now).total_seconds()
 
-        # إرسال التنبيه بين 9 و 10 دقائق (540 إلى 600 ثانية)
         if 540 <= diff_seconds <= 600:
           alert_msg = (
               f"📢 **تنبيه بصلاة {prayer_name} (ولاية {city_data['ar']})**\n\n"
@@ -331,9 +342,6 @@ async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
     print(f"Error in scheduler: {e}")
 
 
-# ---------------------------------------------------------
-# 5. تهيئة قائمة الأوامر المدمجة (Bot Menu)
-# ---------------------------------------------------------
 async def post_init(application: Application):
   commands = [
       BotCommand("salat", "عرض مواقيت الصلاة لولايتك"),
@@ -343,20 +351,16 @@ async def post_init(application: Application):
   await application.bot.set_my_commands(commands)
 
 
-# ---------------------------------------------------------
-# 6. التشغيل الرئيسي
-# ---------------------------------------------------------
 def main():
   keep_alive()
 
   app_bot = (
       Application.builder()
       .token(BOT_TOKEN)
-      .post_init(post_init)  # تفعيل قائمة الأوامر تلقائياً
+      .post_init(post_init)
       .build()
   )
 
-  # تفعيل المجدول الدوري كل 60 ثانية
   if app_bot.job_queue:
     app_bot.job_queue.run_repeating(
         check_and_send_alerts, interval=60, first=10
