@@ -202,7 +202,7 @@ def build_prayer_dashboard(city_ar, prayer_times):
 
 def get_main_keyboard():
   return ReplyKeyboardMarkup(
-      [["🕌 مواقيت الصلاة", "⚙️ تغيير الولاية"]],
+      [["⚙️ تغيير الولاية", "🕌 مواقيت الصلاة"]],
       resize_keyboard=True,
       is_persistent=True,
   )
@@ -255,7 +255,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   selected_city = None
 
-  # التعرف على رقم الولاية سواء كان برقم واحد مثل 2 أو رقمين مثل 02
   if text.isdigit():
     num_key = str(int(text))
     if num_key in WILAYAS:
