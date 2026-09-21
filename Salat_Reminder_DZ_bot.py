@@ -15,13 +15,16 @@ from telegram.ext import (
     filters,
 )
 
-# إعداد التسجيل (Logging)
+# إعداد السجلات (Logging)
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
 
-# 1. خادم Flask للحفاظ على عمل البوت على Render (Keep Alive)
+# ---------------------------------------------------------
+# 1. خادم Flask للحفاظ على تشغيل البوت على Render (Keep Alive)
+# ---------------------------------------------------------
 app = Flask("")
 
 
@@ -40,7 +43,9 @@ def keep_alive():
   t.start()
 
 
-# 2. البيانات والإعدادات الأساسية
+# ---------------------------------------------------------
+# 2. البيانات والولايات وتخزين المواقيت (Cache)
+# ---------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 user_cities = {}
 PRAYER_CACHE = {}
@@ -140,9 +145,9 @@ def get_next_prayer_info(prayer_times):
   algeria_tz = pytz.timezone("Africa/Algiers")
   now = datetime.now(algeria_tz)
 
+  # الصلوات الخمس المفروضة فقط (بدون الشروق)
   prayers = [
       ("الفجر", prayer_times.get("Fajr", "05:15")),
-      ("الشروق", prayer_times.get("Sunrise", "06:41")),
       ("الظهر", prayer_times.get("Dhuhr", "12:48")),
       ("العصر", prayer_times.get("Asr", "16:18")),
       ("المغرب", prayer_times.get("Maghrib", "18:55")),
@@ -151,7 +156,9 @@ def get_next_prayer_info(prayer_times):
 
   for name, time_str in prayers:
     prayer_time_obj = datetime.strptime(time_str[:5], "%H:%M").time()
-    prayer_dt = algeria_tz.localize(datetime.combine(now.date(), prayer_time_obj))
+    prayer_dt = algeria_tz.localize(
+        datetime.combine(now.date(), prayer_time_obj)
+    )
 
     if prayer_dt > now:
       diff = prayer_dt - now
@@ -161,7 +168,9 @@ def get_next_prayer_info(prayer_times):
       if hours > 0:
         time_left_str += f"{hours} ساعة "
       if minutes > 0 or hours == 0:
-        time_left_str += f"و {minutes} دقيقة" if hours > 0 else f"{minutes} دقيقة"
+        time_left_str += (
+            f"و {minutes} دقيقة" if hours > 0 else f"{minutes} دقيقة"
+        )
       return name, time_left_str.strip()
 
   fajr_time_obj = datetime.strptime(
@@ -208,6 +217,9 @@ def get_main_keyboard():
   )
 
 
+# ---------------------------------------------------------
+# 3. الأوامر والتفاعل
+# ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   msg = (
       "أهلاً بك في بوت مواقيت الصلاة للجزائر 🇩🇿\n\n"
@@ -281,6 +293,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ---------------------------------------------------------
+# 4. حلقة التنبيهات الخلفية (10 دقائق قبل الأذان)
+# ---------------------------------------------------------
 async def prayer_alerts_background_loop(app_bot):
   while True:
     try:
@@ -330,14 +345,11 @@ async def post_init(application: Application):
   asyncio.create_task(prayer_alerts_background_loop(application))
 
 
+# ---------------------------------------------------------
+# 5. التشغيل الرئيسي
+# ---------------------------------------------------------
 def main():
   keep_alive()
-
-  try:
-    loop = asyncio.get_event_loop()
-  except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
 
   app_bot = (
       Application.builder()
@@ -355,7 +367,7 @@ def main():
   )
 
   logger.info("Bot is running successfully...")
-  app_bot.run_polling(close_loop=False)
+  app_bot.run_polling()
 
 
 if __name__ == "__main__":
