@@ -2,10 +2,10 @@ import asyncio
 from datetime import datetime, timedelta
 import logging
 import os
+from threading import Thread
 from flask import Flask
 import pytz
 import requests
-from threading import Thread
 from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -15,26 +15,32 @@ from telegram.ext import (
     filters,
 )
 
+# إعداد التسجيل (Logging)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# 1. Flask Web Server
+# 1. خادم Flask للحفاظ على عمل البوت على Render (Keep Alive)
 app = Flask("")
+
 
 @app.route("/")
 def home():
   return "Bot is alive and running!"
 
+
 def run_flask():
-  app.run(host="0.0.0.0", port=8080)
+  port = int(os.environ.get("PORT", 8080))
+  app.run(host="0.0.0.0", port=port)
+
 
 def keep_alive():
   t = Thread(target=run_flask, daemon=True)
   t.start()
 
-# 2. Data & Settings
+
+# 2. البيانات والإعدادات الأساسية
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 user_cities = {}
 PRAYER_CACHE = {}
@@ -100,6 +106,7 @@ WILAYAS = {
     "58": {"ar": "المنيعة", "en": "El Meniaa"},
 }
 
+
 def fetch_prayer_times(city_en):
   algeria_tz = pytz.timezone("Africa/Algiers")
   today_str = datetime.now(algeria_tz).strftime("%Y-%m-%d")
@@ -127,6 +134,7 @@ def fetch_prayer_times(city_en):
       "Maghrib": "18:55",
       "Isha": "20:16",
   }
+
 
 def get_next_prayer_info(prayer_times):
   algeria_tz = pytz.timezone("Africa/Algiers")
@@ -156,13 +164,21 @@ def get_next_prayer_info(prayer_times):
         time_left_str += f"و {minutes} دقيقة" if hours > 0 else f"{minutes} دقيقة"
       return name, time_left_str.strip()
 
-  fajr_time_obj = datetime.strptime(prayer_times.get("Fajr", "05:15")[:5], "%H:%M").time()
-  tomorrow_fajr = algeria_tz.localize(datetime.combine(now.date() + timedelta(days=1), fajr_time_obj))
+  fajr_time_obj = datetime.strptime(
+      prayer_times.get("Fajr", "05:15")[:5], "%H:%M"
+  ).time()
+  tomorrow_fajr = algeria_tz.localize(
+      datetime.combine(now.date() + timedelta(days=1), fajr_time_obj)
+  )
   diff = tomorrow_fajr - now
   hours, remainder = divmod(diff.seconds, 3600)
   minutes = remainder // 60
 
-  return "الفجر (غداً)", f"{hours} ساعة و {minutes} دقيقة" if hours > 0 else f"{minutes} دقيقة"
+  return (
+      "الفجر (غداً)",
+      f"{hours} ساعة و {minutes} دقيقة" if hours > 0 else f"{minutes} دقيقة",
+  )
+
 
 def build_prayer_dashboard(city_ar, prayer_times):
   algeria_tz = pytz.timezone("Africa/Algiers")
@@ -183,8 +199,14 @@ def build_prayer_dashboard(city_ar, prayer_times):
       f"⏱ **الوقت المتبقي:** {time_remaining}"
   )
 
+
 def get_main_keyboard():
-  return ReplyKeyboardMarkup([["🕌 مواقيت الصلاة", "⚙️ تغيير الولاية"]], resize_keyboard=True, persistent=True)
+  return ReplyKeyboardMarkup(
+      [["🕌 مواقيت الصلاة", "⚙️ تغيير الولاية"]],
+      resize_keyboard=True,
+      is_persistent=True,
+  )
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   msg = (
@@ -192,20 +214,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
       "يرجى تحديد ولايتك بإرسال رقم الولاية (من 1 إلى 58) أو اسمها.\n"
       "مثال: أرسل `2` للشلف أو `16` للجزائر أو `44` لعين الدفلى."
   )
-  await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_main_keyboard())
+  await update.message.reply_text(
+      msg, parse_mode="Markdown", reply_markup=get_main_keyboard()
+  )
+
 
 async def setcity_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  await update.message.reply_text("يرجى إرسال رقم ولايتك (1-58) أو اسم الولاية لتحديثها:", reply_markup=get_main_keyboard())
+  await update.message.reply_text(
+      "يرجى إرسال رقم ولايتك (1-58) أو اسم الولاية لتحديثها:",
+      reply_markup=get_main_keyboard(),
+  )
+
 
 async def salat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   chat_id = update.effective_chat.id
   if chat_id not in user_cities:
-    await update.message.reply_text("يرجى تحديد ولايتك أولاً بإرسال رقمها (1-58).", reply_markup=get_main_keyboard())
+    await update.message.reply_text(
+        "يرجى تحديد ولايتك أولاً بإرسال رقمها (1-58).",
+        reply_markup=get_main_keyboard(),
+    )
     return
   city_data = user_cities[chat_id]
   prayer_times = fetch_prayer_times(city_data["en"])
   dashboard = build_prayer_dashboard(city_data["ar"], prayer_times)
-  await update.message.reply_text(dashboard, parse_mode="Markdown", reply_markup=get_main_keyboard())
+  await update.message.reply_text(
+      dashboard, parse_mode="Markdown", reply_markup=get_main_keyboard()
+  )
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
   chat_id = update.effective_chat.id
@@ -230,14 +265,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if selected_city:
     user_cities[chat_id] = selected_city
     await update.message.reply_text(
-        f"✅ تم حفظ ولايتك: **{selected_city['ar']}**.\n\nاضغط على زر **🕌 مواقيت الصلاة** لعرض الجدول.",
+        f"✅ تم حفظ ولايتك: **{selected_city['ar']}**.\n\nاضغط على زر **🕌"
+        " مواقيت الصلاة** لعرض الجدول.",
         parse_mode="Markdown",
         reply_markup=get_main_keyboard(),
     )
   else:
-    await update.message.reply_text("لم أتعرف على الولاية. يرجى إرسال رقم الولاية الصحيح (1-58).", reply_markup=get_main_keyboard())
+    await update.message.reply_text(
+        "لم أتعرف على الولاية. يرجى إرسال رقم الولاية الصحيح (1-58).",
+        reply_markup=get_main_keyboard(),
+    )
 
-# حلقة خلفية للتنبيهات تعمل بدون الحاجة لـ JobQueue
+
 async def prayer_alerts_background_loop(app_bot):
   while True:
     try:
@@ -257,7 +296,9 @@ async def prayer_alerts_background_loop(app_bot):
           if not time_str:
             continue
           prayer_time_obj = datetime.strptime(time_str[:5], "%H:%M").time()
-          prayer_dt = algeria_tz.localize(datetime.combine(now.date(), prayer_time_obj))
+          prayer_dt = algeria_tz.localize(
+              datetime.combine(now.date(), prayer_time_obj)
+          )
           diff_seconds = (prayer_dt - now).total_seconds()
 
           if 540 <= diff_seconds <= 600:
@@ -266,11 +307,14 @@ async def prayer_alerts_background_loop(app_bot):
                 f"باقي **10 دقائق** فقط على أذان صلاة {prayer_name}.\n"
                 f"قم بالاستعداد والوضوء بارك الله فيك 🕌"
             )
-            await app_bot.bot.send_message(chat_id=chat_id, text=alert_msg, parse_mode="Markdown")
+            await app_bot.bot.send_message(
+                chat_id=chat_id, text=alert_msg, parse_mode="Markdown"
+            )
     except Exception as e:
       logger.error(f"Error in background alerts: {e}")
 
     await asyncio.sleep(60)
+
 
 async def post_init(application: Application):
   commands = [
@@ -279,13 +323,18 @@ async def post_init(application: Application):
       BotCommand("start", "بدء استخدام البوت وإعداد البيانات"),
   ]
   await application.bot.set_my_commands(commands)
-  # تشغيل حلقة التنبيهات في الخلفية
   asyncio.create_task(prayer_alerts_background_loop(application))
+
 
 def main():
   keep_alive()
 
-  # .job_queue(None) يمنع حدوث خطأ التعارض مع Python 3.14
+  try:
+    loop = asyncio.get_event_loop()
+  except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
   app_bot = (
       Application.builder()
       .token(BOT_TOKEN)
@@ -297,10 +346,13 @@ def main():
   app_bot.add_handler(CommandHandler("start", start_command))
   app_bot.add_handler(CommandHandler("setcity", setcity_command))
   app_bot.add_handler(CommandHandler("salat", salat_command))
-  app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+  app_bot.add_handler(
+      MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+  )
 
   logger.info("Bot is running successfully...")
-  app_bot.run_polling()
+  app_bot.run_polling(close_loop=False)
+
 
 if __name__ == "__main__":
   main()
