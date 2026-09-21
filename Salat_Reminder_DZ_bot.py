@@ -172,22 +172,24 @@ async def send_pre_prayer_alert(
   )
 
 
-# معالج الأزرار التفاعلية (تحديث الوقت والاستعداد للصلاة)
+# معالج الأزرار التفاعلية
 async def button_callback_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
   query = update.callback_query
-  await query.answer()
+  chat_id = update.effective_chat.id
 
+  # 1. زر "نعم سأستعد للصلاة 🕌"
   if query.data.startswith("prepare_salat_"):
+    await query.answer("تم تسجيل استجابتك! تقبل الله.")
     prayer_name = query.data.split("_")[-1]
     await query.edit_message_text(
         text=f"🤲 **تقبل الله صلاتكم وطاعاتكم!**\nدعواتك معنا في صلاة {prayer_name}.",
         parse_mode="Markdown",
     )
 
+  # 2. زر "تحديث الوقت 🔄"
   elif query.data == "refresh_time":
-    chat_id = update.effective_chat.id
     city = user_cities.get(chat_id, "الشلف")
 
     dummy_times = {
@@ -209,8 +211,12 @@ async def button_callback_handler(
       await query.edit_message_text(
           text=updated_text, reply_markup=reply_markup, parse_mode="Markdown"
       )
-    except Exception:
-      pass
+      await query.answer("تم تحديث الوقت بنجاح 🔄")
+    except Exception as e:
+      if "Message is not modified" in str(e):
+        await query.answer("الوقت محدّث بالفعل ⏱️")
+      else:
+        await query.answer("حدث خطأ أثناء التحديث.")
 
 
 # ---------------------------------------------------------
