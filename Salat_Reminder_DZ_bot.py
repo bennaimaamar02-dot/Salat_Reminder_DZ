@@ -211,8 +211,8 @@ def get_main_keyboard():
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   msg = (
       "أهلاً بك في بوت مواقيت الصلاة للجزائر 🇩🇿\n\n"
-      "يرجى تحديد ولايتك بإرسال رقم الولاية (من 1 إلى 58) أو اسمها.\n"
-      "مثال: أرسل `2` للشلف أو `16` للجزائر أو `44` لعين الدفلى."
+      "يرجى تحديد ولايتك بإرسال رقم الولاية (من 01 إلى 58) أو اسمها.\n"
+      "مثال: أرسل `02` للشلف أو `16` للجزائر أو `09` للبليدة."
   )
   await update.message.reply_text(
       msg, parse_mode="Markdown", reply_markup=get_main_keyboard()
@@ -221,7 +221,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def setcity_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   await update.message.reply_text(
-      "يرجى إرسال رقم ولايتك (1-58) أو اسم الولاية لتحديثها:",
+      "يرجى إرسال رقم ولايتك (01-58) أو اسم الولاية لتحديثها:",
       reply_markup=get_main_keyboard(),
   )
 
@@ -230,7 +230,7 @@ async def salat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   chat_id = update.effective_chat.id
   if chat_id not in user_cities:
     await update.message.reply_text(
-        "يرجى تحديد ولايتك أولاً بإرسال رقمها (1-58).",
+        "يرجى تحديد ولايتك أولاً بإرسال رقمها (01-58).",
         reply_markup=get_main_keyboard(),
     )
     return
@@ -254,9 +254,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
   selected_city = None
-  if text in WILAYAS:
-    selected_city = WILAYAS[text]
-  else:
+
+  # التعرف على رقم الولاية سواء كان برقم واحد مثل 2 أو رقمين مثل 02
+  if text.isdigit():
+    num_key = str(int(text))
+    if num_key in WILAYAS:
+      selected_city = WILAYAS[num_key]
+
+  if not selected_city:
     for code, data in WILAYAS.items():
       if data["ar"] in text or text in data["ar"]:
         selected_city = data
@@ -272,7 +277,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
   else:
     await update.message.reply_text(
-        "لم أتعرف على الولاية. يرجى إرسال رقم الولاية الصحيح (1-58).",
+        "لم أتعرف على الولاية. يرجى إرسال رقم الولاية الصحيح (01-58).",
         reply_markup=get_main_keyboard(),
     )
 
