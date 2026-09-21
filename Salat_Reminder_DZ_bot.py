@@ -4,13 +4,8 @@ from flask import Flask
 import pytz
 import requests
 from threading import Thread
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    Application,
-    CallbackQueryHandler,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 # ---------------------------------------------------------
 # 1. خادم Flask للحفاظ على استمرار تشغيل البوت على Render
@@ -35,6 +30,177 @@ def keep_alive():
 # ---------------------------------------------------------
 # 2. إعدادات البوت والبيانات
 # ---------------------------------------------------------
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+# قاعدة بيانات مصغرة لحفظ ولاية وتعرف كل مستخدم
+# في التطبيق الفعلي يتم حفظ chat_id للجميع عند الضغط على /start
+user_cities = {}
+
+
+def get_next_prayer_info(prayer_times):
+  algeria_tz = pytz.timezone("Africa/Algiers")
+  now = datetime.now(algeria_tz)
+
+  prayers = [
+      ("الفجر", prayer_times.get("Fajr", "05:15")),
+      ("الشروق", prayer_times.get("Sunrise", "06:41")),
+      ("الظهر", prayer_times.get("Dhuhr", "12:48")),
+      ("العصر", prayer_times.get("Asr", "16:18")),
+      ("المغرب", prayer_times.get("Maghrib", "18:55")),
+      ("العشاء", prayer_times.get("Isha", "20:16")),
+  ]
+
+  for name, time_str in prayers:
+    prayer_time_obj = datetime.strptime(time_str, "%H:%M").time()
+    prayer_dt = algeria_tz.localize(
+        datetime.combine(now.date(), prayer_time_obj)
+    )
+
+    if prayer_dt > now:
+      diff = prayer_dt - now
+      hours, remainder = divmod(diff.seconds, 3600)
+      minutes = remainder // 60
+
+      time_left_str = ""
+      if hours > 0:
+        time_left_str += f"{hours} ساعة "
+      if minutes > 0 or hours == 0:
+        time_left_str += (
+            f"و {minutes} دقيقة" if hours > 0 else f"{minutes} دقيقة"
+        )
+
+      return name, time_left_str.strip()
+
+  fajr_time_obj = datetime.strptime(
+      prayer_times.get("Fajr", "05:15"), "%H:%M"
+  ).time()
+  tomorrow_fajr = algeria_tz.localize(
+      datetime.combine(now.date() + timedelta(days=1), fajr_time_obj)
+  )
+
+  diff = tomorrow_fajr - now
+  hours, remainder = divmod(diff.seconds, 3600)
+  minutes = remainder // 60
+
+  return (
+      "الفجر (غداً)",
+      (
+          f"{hours} ساعة و {minutes} دقيقة"
+          if hours > 0
+          else f"{minutes} دقيقة"
+      ),
+  )
+
+
+def build_prayer_dashboard(city_name, prayer_times):
+  algeria_tz = pytz.timezone("Africa/Algiers")
+  today_date = datetime.now(algeria_tz).strftime("%Y-%m-%d")
+  next_prayer, time_remaining = get_next_prayer_info(prayer_times)
+
+  message = (
+      f"🕌 **مواقيت الصلاة لولاية {city_name}**\n"
+      f"📅 **اليوم:** {today_date}\n\n"
+      f"`الفـجـر   :` `{prayer_times.get('Fajr', '05:15')}`\n"
+      f"`الشروق  :` `{prayer_times.get('Sunrise', '06:41')}`\n"
+      f"`الظـهـر   :` `{prayer_times.get('Dhuhr', '12:48')}`\n"
+      f"`العـصـر   :` `{prayer_times.get('Asr', '16:18')}`\n"
+      f"`المغرب  :` `{prayer_times.get('Maghrib', '18:55')}`\n"
+      f"`العـشاء  :` `{prayer_times.get('Isha', '20:16')}`\n\n"
+      f"───────────────\n"
+      f"⏳ **الصلاة القادمة:** صلاة {next_prayer}\n"
+      f"⏱️ **الوقت المتبقي:** {time_remaining}"
+  )
+  return message
+
+
+# ---------------------------------------------------------
+# 3. دالة الفحص الدوري والتنبيه التلقائي (قبل 10 دقائق)
+# ---------------------------------------------------------
+async def check_and_send_alerts(context: ContextTypes.DEFAULT_TYPE):
+  algeria_tz = pytz.timezone("Africa/Algiers")
+  now = datetime.now(algeria_tz)
+
+  # مواقيت الصلاة الاسترشادية
+  dummy_times = {
+      "الفجر": "05:15",
+      "الظهر": "12:48",
+      "العصر": "16:18",
+      "المغرب": "18:55",
+      "العشاء": "20:16",
+  }
+
+  for prayer_name, time_str in dummy_times.items():
+    prayer_time_obj = datetime.strptime(time_str, "%H:%M").time()
+    prayer_dt = algeria_tz.localize(
+        datetime.combine(now.date(), prayer_time_obj)
+    )
+
+    # حساب الفارق بالثواني بين الوقت الحالي ووقت الصلاة
+    diff_seconds = (prayer_dt - now).total_seconds()
+
+    # إذا كان المتبقي بالضبط بين 9 دقائق و 10 دقائق (540 إلى 600 ثانية)
+    if 540 <= diff_seconds <= 600:
+      for chat_id in user_cities.keys():
+        try:
+          alert_msg = (
+              f"📢 **تنبيه بصلاة {prayer_name}**\n\n"
+              f"باقي **10 دقائق** فقط على أذان صلاة {prayer_name}.\n"
+              f"قم بالاستعداد والوضوء بارك الله فيك 🕌"
+          )
+          await context.bot.send_message(
+              chat_id=chat_id, text=alert_msg, parse_mode="Markdown"
+          )
+        except Exception:
+          pass
+
+
+# ---------------------------------------------------------
+# 4. الأوامر وتشغيل البوت
+# ---------------------------------------------------------
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  chat_id = update.effective_chat.id
+  user_cities[chat_id] = "الشلف"  # حفظ المستخدم لتصلة التنبيهات
+  await update.message.reply_text(
+      "أهلاً بك! تم تفعيل تنبيهات مواقيت الصلاة لولاية الشلف تلقائياً (قبل 10"
+      " دقائق من كل صلاة)."
+  )
+
+
+async def salat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  chat_id = update.effective_chat.id
+  city = user_cities.get(chat_id, "الشلف")
+
+  dummy_times = {
+      "Fajr": "05:15",
+      "Sunrise": "06:41",
+      "Dhuhr": "12:48",
+      "Asr": "16:18",
+      "Maghrib": "18:55",
+      "Isha": "20:16",
+  }
+
+  text = build_prayer_dashboard(city, dummy_times)
+  await update.message.reply_text(text=text, parse_mode="Markdown")
+
+
+def main():
+  keep_alive()
+
+  app_bot = Application.builder().token(BOT_TOKEN).build()
+
+  # إضافة المجدول ليفحص الوقت كل 60 ثانية
+  job_queue = app_bot.job_queue
+  job_queue.run_repeating(check_and_send_alerts, interval=60, first=10)
+
+  app_bot.add_handler(CommandHandler("start", start_command))
+  app_bot.add_handler(CommandHandler("salat", salat_command))
+
+  print("Bot is working successfully with auto alerts...")
+  app_bot.run_polling()
+
+
+if __name__ == "__main__":
+  main()# ---------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 # قاعدة بيانات مصغرة لحفظ ولاية كل مستخدم
