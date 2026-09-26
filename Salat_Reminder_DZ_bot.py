@@ -44,9 +44,11 @@ def keep_alive():
 
 
 # ---------------------------------------------------------
-# 2. البيانات والولايات وتخزين المواقيت (Cache)
+# 2. البيانات والولايات وتخزين المواقيت (Cache) ومتغيرات البيئة
 # ---------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))  # قراءة ID الأدمن بأمان
+
 user_cities = {}
 PRAYER_CACHE = {}
 sent_alerts = set()  # لمنع تكرار إرسال التنبيه في نفس الدقيقة
@@ -254,6 +256,19 @@ async def salat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   )
 
 
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  """أمر إحصائيات مخصص لمدير البوت فقط"""
+  if update.effective_chat.id == ADMIN_ID:
+    user_count = len(user_cities)
+    await update.message.reply_text(
+        f"📊 **إحصائيات البوت:**\n\nعدد المشتركين النشطين حالياً:"
+        f" **{user_count}**",
+        parse_mode="Markdown",
+    )
+  else:
+    await update.message.reply_text("عذراً، هذا الأمر مخصص لمدير البوت فقط.")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
   chat_id = update.effective_chat.id
   text = update.message.text.strip()
@@ -406,6 +421,7 @@ def main():
   app_bot.add_handler(CommandHandler("start", start_command))
   app_bot.add_handler(CommandHandler("setcity", setcity_command))
   app_bot.add_handler(CommandHandler("salat", salat_command))
+  app_bot.add_handler(CommandHandler("stats", stats_command))
   app_bot.add_handler(
       MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
   )
