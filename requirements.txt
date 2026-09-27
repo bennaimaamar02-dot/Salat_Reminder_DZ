@@ -3,3 +3,4 @@ APScheduler==3.10.4
 flask==3.0.3
 requests==2.31.0
 pytz==2024.1
+pymongo[srv]
