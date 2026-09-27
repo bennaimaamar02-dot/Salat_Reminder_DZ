@@ -4,6 +4,7 @@ import logging
 import os
 from threading import Thread
 from flask import Flask
+from pymongo import MongoClient
 import pytz
 import requests
 from telegram import BotCommand, ReplyKeyboardMarkup, Update
@@ -44,12 +45,44 @@ def keep_alive():
 
 
 # ---------------------------------------------------------
-# 2. البيانات والولايات وتخزين المواقيت (Cache) ومتغيرات البيئة
+# 2. متغيرات البيئة وقاعدة البيانات MongoDB
 # ---------------------------------------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))  # قراءة ID الأدمن بأمان
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
+MONGO_URI = os.environ.get("MONGODB_URI")
 
-user_cities = {}
+# الاتصال بقاعدة البيانات
+try:
+  mongo_client = MongoClient(MONGO_URI)
+  db = mongo_client["SalatBotDB"]
+  users_col = db["users"]
+  logger.info("Successfully connected to MongoDB!")
+except Exception as e:
+  logger.error(f"Failed to connect to MongoDB: {e}")
+
+
+def get_user_city(chat_id):
+  doc = users_col.find_one({"chat_id": chat_id})
+  if doc and "city" in doc:
+    return doc["city"]
+  return None
+
+
+def save_user_city(chat_id, city_data):
+  users_col.update_one(
+      {"chat_id": chat_id},
+      {"$set": {"chat_id": chat_id, "city": city_data}},
+      upsert=True,
+  )
+
+
+def get_all_users():
+  users = {}
+  for doc in users_col.find():
+    users[doc["chat_id"]] = doc["city"]
+  return users
+
+
 PRAYER_CACHE = {}
 sent_alerts = set()  # لمنع تكرار إرسال التنبيه في نفس الدقيقة
 
@@ -242,13 +275,13 @@ async def setcity_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def salat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   chat_id = update.effective_chat.id
-  if chat_id not in user_cities:
+  city_data = get_user_city(chat_id)
+  if not city_data:
     await update.message.reply_text(
         "يرجى تحديد ولايتك أولاً بإرسال رقمها (01-58).",
         reply_markup=get_main_keyboard(),
     )
     return
-  city_data = user_cities[chat_id]
   prayer_times = fetch_prayer_times(city_data["en"])
   dashboard = build_prayer_dashboard(city_data["ar"], prayer_times)
   await update.message.reply_text(
@@ -259,9 +292,9 @@ async def salat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   """أمر إحصائيات مخصص لمدير البوت فقط"""
   if update.effective_chat.id == ADMIN_ID:
-    user_count = len(user_cities)
+    user_count = users_col.count_documents({})
     await update.message.reply_text(
-        f"📊 **إحصائيات البوت:**\n\nعدد المشتركين النشطين حالياً:"
+        f"📊 **إحصائيات البوت:**\n\nإجمالي المشتركين المسجلين في قاعدة البيانات:"
         f" **{user_count}**",
         parse_mode="Markdown",
     )
@@ -294,10 +327,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         break
 
   if selected_city:
-    user_cities[chat_id] = selected_city
+    save_user_city(chat_id, selected_city)
     await update.message.reply_text(
-        f"✅ تم حفظ ولايتك: **{selected_city['ar']}**.\n\nاضغط على زر **🕌"
-        " مواقيت الصلاة** لعرض الجدول.",
+        f"✅ تم حفظ ولايتك: **{selected_city['ar']}** في قاعدة البيانات"
+        " بنجاح.\n\nاضغط على زر **🕌 مواقيت الصلاة** لعرض الجدول.",
         parse_mode="Markdown",
         reply_markup=get_main_keyboard(),
     )
@@ -318,7 +351,9 @@ async def prayer_alerts_background_loop(app_bot):
       now = datetime.now(algeria_tz)
       today_str = now.strftime("%Y-%m-%d")
 
-      for chat_id, city_data in list(user_cities.items()):
+      all_users = get_all_users()
+
+      for chat_id, city_data in all_users.items():
         # --- أ) تذكير يوم الجمعة (عند الساعة 09:00 صباحاً) ---
         if now.weekday() == 4 and now.hour == 9 and now.minute == 0:
           friday_key = f"{chat_id}_{today_str}_friday"
@@ -426,7 +461,7 @@ def main():
       MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
   )
 
-  logger.info("Bot is running successfully...")
+  logger.info("Bot is running successfully with MongoDB...")
   app_bot.run_polling()
 
 
